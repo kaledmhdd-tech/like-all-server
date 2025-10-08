@@ -80,7 +80,7 @@ async def send_multiple_requests(uid, server_name, url):
     tasks = []
     tokens = load_tokens(server_name)
     for i in range(100):
-        token = tokens[i % len(tokens)]["token"]
+        token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
     results = await asyncio.gather(*tasks)
     return results
