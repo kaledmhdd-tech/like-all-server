@@ -15,7 +15,7 @@ import uid_generator_pb2
 import time
 from collections import defaultdict
 from datetime import datetime
-
+import random
 app = Flask(__name__)
 
 # ✅ Per-key rate limit setup
