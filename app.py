@@ -79,7 +79,7 @@ async def send_multiple_requests(uid, server_name, url):
     encrypted_uid = encrypt_message(protobuf_message)
     tasks = []
     tokens = load_tokens(server_name)
-    for i in range(200):
+    for i in range(500):
         token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
     results = await asyncio.gather(*tasks)
