@@ -19,7 +19,7 @@ import random
 app = Flask(__name__)
 
 # ✅ Per-key rate limit setup
-KEY_LIMIT = 5000
+KEY_LIMIT = 1000
 token_tracker = defaultdict(lambda: [0, time.time()])  # token: [count, last_reset_time]
 
 def get_today_midnight_timestamp():
