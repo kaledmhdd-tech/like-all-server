@@ -95,7 +95,7 @@ async def send_multiple_requests(uid, server_name, url):
         print(f"No tokens available for server {server_name}, skipping send_multiple_requests")
         return []
 
-    for i in range(200):
+    for i in range(100):
         token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
     results = await asyncio.gather(*tasks)
