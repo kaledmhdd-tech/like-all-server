@@ -34,7 +34,7 @@ def load_tokens(server_name):
     else:
         url = "https://aauto-token.onrender.com/api/get_jwt"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=50)
         js = res.json()
         tokens = js.get("tokens", {})
         return [{"token": t} for t in tokens.values()]
