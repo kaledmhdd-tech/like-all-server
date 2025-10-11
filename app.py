@@ -162,12 +162,29 @@ def handle_requests():
             return jsonify({"error": "UID and server_name are required"}), 400
 
         def process_request():
-            data = load_tokens(server_name)
-            if not data:
+            tokens = load_tokens(server_name)
+            if not tokens:
                 return {"error": "No tokens available, try again later"}, 503
 
-            token = data[0]['token']
             encrypt = enc(uid)
+
+            # 🌀 دالة تجريب كل التوكنات حتى ينجح decode
+            def try_make_request(encrypt, server_name, tokens):
+                for t in tokens:
+                    token = t['token']
+                    data = make_request(encrypt, server_name, token)
+                    if data is not None:
+                        return data, token
+                return None, None
+
+            # قراءة الحالة قبل اللايك
+            before, token = try_make_request(encrypt, server_name, tokens)
+            if before is None:
+                return {"error": "All tokens failed to decode before sending likes"}, 500
+
+            jsone = MessageToJson(before)
+            data = json.loads(jsone)
+            before_like = int(data['AccountInfo'].get('Likes', 0))
 
             today_midnight = get_today_midnight_timestamp()
             count, last_reset = token_tracker[token]
@@ -183,28 +200,22 @@ def handle_requests():
                     "remains": f"(0/{KEY_LIMIT})"
                 }
 
-            before = make_request(encrypt, server_name, token)
-            if before is None:
-                raise ValueError("Failed to decode Protobuf before sending likes")
-
-            jsone = MessageToJson(before)
-            data = json.loads(jsone)
-            before_like = int(data['AccountInfo'].get('Likes', 0))
-
+            # اختيار رابط السيرفر الصحيح للايك
             if server_name == "IND":
                 url = "https://client.ind.freefiremobile.com/LikeProfile"
             else:
                 url = "https://clientbp.ggblueshark.com/LikeProfile"
 
+            # إرسال اللايكات
             asyncio.run(send_multiple_requests(uid, server_name, url))
 
-            after = make_request(encrypt, server_name, token)
+            # قراءة الحالة بعد اللايك
+            after, _ = try_make_request(encrypt, server_name, tokens)
             if after is None:
-                raise ValueError("Failed to decode Protobuf after sending likes")
+                return {"error": "All tokens failed to decode after sending likes"}, 500
 
             jsone = MessageToJson(after)
             data = json.loads(jsone)
-
             after_like = int(data['AccountInfo']['Likes'])
             id = int(data['AccountInfo']['UID'])
             name = str(data['AccountInfo']['PlayerNickname'])
@@ -228,6 +239,7 @@ def handle_requests():
                 "remains": f"({remains}/{KEY_LIMIT})"
             }
 
+            # 🕒 أضف وقت التنفيذ والزمن المستغرق
             result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
             result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
@@ -240,7 +252,6 @@ def handle_requests():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
