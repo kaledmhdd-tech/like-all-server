@@ -1,5 +1,3 @@
-# Code by @xp_owner99 | Don’t upload without credit 
-
 from flask import Flask, request, jsonify
 import asyncio
 from Crypto.Cipher import AES
@@ -27,19 +25,33 @@ def get_today_midnight_timestamp():
     midnight = datetime(now.year, now.month, now.day)
     return midnight.timestamp()
 
-# ✅ تعديل: جلب التوكنات من الـ API بدل الملفات
+# ✅ تعديل: جلب التوكنات من الـ API بدل الملفات مع زيادة timeout ومعالجة الأخطاء
 def load_tokens(server_name):
     if server_name == "IND":
         url = "https://auto-token-ind.onrender.com/api/get_jwt"
     else:
         url = "https://aauto-token.onrender.com/api/get_jwt"
+
     try:
-        res = requests.get(url, timeout=50)
+        # زيادة timeout إلى 120 ثانية
+        res = requests.get(url, timeout=120)
+        res.raise_for_status()  # للتأكد من عدم وجود خطأ HTTP
         js = res.json()
         tokens = js.get("tokens", {})
-        return [{"token": t} for t in tokens.values()]
+        token_list = [{"token": t} for t in tokens.values()]
+
+        if not token_list:
+            print(f"No tokens returned from {server_name}")
+        return token_list
+
+    except requests.exceptions.Timeout:
+        print(f"Timeout while fetching tokens from {server_name}")
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"Request error fetching tokens from {server_name}: {e}")
+        return []
     except Exception as e:
-        print(f"Error fetching tokens: {e}")
+        print(f"Unexpected error fetching tokens from {server_name}: {e}")
         return []
 
 def encrypt_message(plaintext):
@@ -79,6 +91,10 @@ async def send_multiple_requests(uid, server_name, url):
     encrypted_uid = encrypt_message(protobuf_message)
     tasks = []
     tokens = load_tokens(server_name)
+    if not tokens:
+        print(f"No tokens available for server {server_name}, skipping send_multiple_requests")
+        return []
+
     for i in range(200):
         token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
@@ -146,6 +162,9 @@ def handle_requests():
 
     def process_request():
         data = load_tokens(server_name)
+        if not data:
+            return {"error": "No tokens available, try again later"}, 503
+
         token = data[0]['token']
         encrypt = enc(uid)
 
