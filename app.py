@@ -1,3 +1,5 @@
+# Code by @xp_owner99 | Don’t upload without credit 
+
 from flask import Flask, request, jsonify
 import asyncio
 from Crypto.Cipher import AES
@@ -25,33 +27,19 @@ def get_today_midnight_timestamp():
     midnight = datetime(now.year, now.month, now.day)
     return midnight.timestamp()
 
-# ✅ تعديل: جلب التوكنات من الـ API بدل الملفات مع زيادة timeout ومعالجة الأخطاء
+# ✅ تعديل: جلب التوكنات من الـ API بدل الملفات
 def load_tokens(server_name):
     if server_name == "IND":
         url = "https://auto-token-ind.onrender.com/api/get_jwt"
     else:
         url = "https://aauto-token.onrender.com/api/get_jwt"
-
     try:
-        # زيادة timeout إلى 120 ثانية
-        res = requests.get(url, timeout=120)
-        res.raise_for_status()  # للتأكد من عدم وجود خطأ HTTP
+        res = requests.get(url, timeout=50)
         js = res.json()
         tokens = js.get("tokens", {})
-        token_list = [{"token": t} for t in tokens.values()]
-
-        if not token_list:
-            print(f"No tokens returned from {server_name}")
-        return token_list
-
-    except requests.exceptions.Timeout:
-        print(f"Timeout while fetching tokens from {server_name}")
-        return []
-    except requests.exceptions.RequestException as e:
-        print(f"Request error fetching tokens from {server_name}: {e}")
-        return []
+        return [{"token": t} for t in tokens.values()]
     except Exception as e:
-        print(f"Unexpected error fetching tokens from {server_name}: {e}")
+        print(f"Error fetching tokens: {e}")
         return []
 
 def encrypt_message(plaintext):
@@ -91,11 +79,7 @@ async def send_multiple_requests(uid, server_name, url):
     encrypted_uid = encrypt_message(protobuf_message)
     tasks = []
     tokens = load_tokens(server_name)
-    if not tokens:
-        print(f"No tokens available for server {server_name}, skipping send_multiple_requests")
-        return []
-
-    for i in range(100):
+    for i in range(200):
         token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
     results = await asyncio.gather(*tasks)
@@ -148,110 +132,85 @@ def decode_protobuf(binary):
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
-    try:
-        start_time = time.time()  # ⏱️ بداية القياس
+    start_time = time.time()  # ⏱️ بداية القياس
 
-        uid = request.args.get("uid")
-        server_name = request.args.get("server_name", "").upper()
-        key = request.args.get("key")
+    uid = request.args.get("uid")
+    server_name = request.args.get("server_name", "").upper()
+    key = request.args.get("key")
 
-        if key != "BNGXX":
-            return jsonify({"error": "Invalid or missing API key 🔑"}), 403
+    if key != "BNGXX":
+        return jsonify({"error": "Invalid or missing API key 🔑"}), 403
 
-        if not uid or not server_name:
-            return jsonify({"error": "UID and server_name are required"}), 400
+    if not uid or not server_name:
+        return jsonify({"error": "UID and server_name are required"}), 400
 
-        def process_request():
-            tokens = load_tokens(server_name)
-            if not tokens:
-                return {"error": "No tokens available, try again later"}, 503
+    def process_request():
+        data = load_tokens(server_name)
+        token = data[0]['token']
+        encrypt = enc(uid)
 
-            encrypt = enc(uid)
+        today_midnight = get_today_midnight_timestamp()
+        count, last_reset = token_tracker[token]
 
-            # 🌀 دالة تجريب كل التوكنات حتى ينجح decode
-            def try_make_request(encrypt, server_name, tokens):
-                for t in tokens:
-                    token = t['token']
-                    data = make_request(encrypt, server_name, token)
-                    if data is not None:
-                        return data, token
-                return None, None
+        if last_reset < today_midnight:
+            token_tracker[token] = [0, time.time()]
+            count = 0
 
-            # قراءة الحالة قبل اللايك
-            before, token = try_make_request(encrypt, server_name, tokens)
-            if before is None:
-                return {"error": "All tokens failed to decode before sending likes"}, 500
-
-            jsone = MessageToJson(before)
-            data = json.loads(jsone)
-            before_like = int(data['AccountInfo'].get('Likes', 0))
-
-            today_midnight = get_today_midnight_timestamp()
-            count, last_reset = token_tracker[token]
-
-            if last_reset < today_midnight:
-                token_tracker[token] = [0, time.time()]
-                count = 0
-
-            if count >= KEY_LIMIT:
-                return {
-                    "error": "Daily request limit reached for this key.",
-                    "status": 429,
-                    "remains": f"(0/{KEY_LIMIT})"
-                }
-
-            # اختيار رابط السيرفر الصحيح للايك
-            if server_name == "IND":
-                url = "https://client.ind.freefiremobile.com/LikeProfile"
-            else:
-                url = "https://clientbp.ggblueshark.com/LikeProfile"
-
-            # إرسال اللايكات
-            asyncio.run(send_multiple_requests(uid, server_name, url))
-
-            # قراءة الحالة بعد اللايك
-            after, _ = try_make_request(encrypt, server_name, tokens)
-            if after is None:
-                return {"error": "All tokens failed to decode after sending likes"}, 500
-
-            jsone = MessageToJson(after)
-            data = json.loads(jsone)
-            after_like = int(data['AccountInfo']['Likes'])
-            id = int(data['AccountInfo']['UID'])
-            name = str(data['AccountInfo']['PlayerNickname'])
-
-            like_given = after_like - before_like
-            status = 1 if like_given != 0 else 2
-
-            if like_given > 0:
-                token_tracker[token][0] += 1
-                count += 1
-
-            remains = KEY_LIMIT - count
-
-            result = {
-                "LikesGivenByAPI": like_given,
-                "LikesafterCommand": after_like,
-                "LikesbeforeCommand": before_like,
-                "PlayerNickname": name,
-                "UID": id,
-                "status": status,
-                "remains": f"({remains}/{KEY_LIMIT})"
+        if count >= KEY_LIMIT:
+            return {
+                "error": "Daily request limit reached for this key.",
+                "status": 429,
+                "remains": f"(0/{KEY_LIMIT})"
             }
 
-            # 🕒 أضف وقت التنفيذ والزمن المستغرق
-            result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
-            result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        before = make_request(encrypt, server_name, token)
+        jsone = MessageToJson(before)
+        data = json.loads(jsone)
+        before_like = int(data['AccountInfo'].get('Likes', 0))
 
-            return result
+        # ✅ تعديل: فقط السيرفرين المطلوبين
+        if server_name == "IND":
+            url = "https://client.ind.freefiremobile.com/LikeProfile"
+        else:
+            url = "https://clientbp.ggblueshark.com/LikeProfile"
 
-        result = process_request()
-        return jsonify(result)
+        asyncio.run(send_multiple_requests(uid, server_name, url))
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        after = make_request(encrypt, server_name, token)
+        jsone = MessageToJson(after)
+        data = json.loads(jsone)
+
+        after_like = int(data['AccountInfo']['Likes'])
+        id = int(data['AccountInfo']['UID'])
+        name = str(data['AccountInfo']['PlayerNickname'])
+
+        like_given = after_like - before_like
+        status = 1 if like_given != 0 else 2
+
+        if like_given > 0:
+            token_tracker[token][0] += 1
+            count += 1
+
+        remains = KEY_LIMIT - count
+
+        result = {
+            "LikesGivenByAPI": like_given,
+            "LikesafterCommand": after_like,
+            "LikesbeforeCommand": before_like,
+            "PlayerNickname": name,
+            "UID": id,
+            "status": status,
+            "remains": f"({remains}/{KEY_LIMIT})"
+        }
+
+        # 🕒 أضف وقت التنفيذ والزمن المستغرق
+        result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
+        result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+        return result
+
+    result = process_request()
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
