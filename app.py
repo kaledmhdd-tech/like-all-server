@@ -148,88 +148,99 @@ def decode_protobuf(binary):
 
 @app.route('/like', methods=['GET'])
 def handle_requests():
-    start_time = time.time()  # ⏱️ بداية القياس
+    try:
+        start_time = time.time()  # ⏱️ بداية القياس
 
-    uid = request.args.get("uid")
-    server_name = request.args.get("server_name", "").upper()
-    key = request.args.get("key")
+        uid = request.args.get("uid")
+        server_name = request.args.get("server_name", "").upper()
+        key = request.args.get("key")
 
-    if key != "BNGXX":
-        return jsonify({"error": "Invalid or missing API key 🔑"}), 403
+        if key != "BNGXX":
+            return jsonify({"error": "Invalid or missing API key 🔑"}), 403
 
-    if not uid or not server_name:
-        return jsonify({"error": "UID and server_name are required"}), 400
+        if not uid or not server_name:
+            return jsonify({"error": "UID and server_name are required"}), 400
 
-    def process_request():
-        data = load_tokens(server_name)
-        if not data:
-            return {"error": "No tokens available, try again later"}, 503
+        def process_request():
+            data = load_tokens(server_name)
+            if not data:
+                return {"error": "No tokens available, try again later"}, 503
 
-        token = data[0]['token']
-        encrypt = enc(uid)
+            token = data[0]['token']
+            encrypt = enc(uid)
 
-        today_midnight = get_today_midnight_timestamp()
-        count, last_reset = token_tracker[token]
+            today_midnight = get_today_midnight_timestamp()
+            count, last_reset = token_tracker[token]
 
-        if last_reset < today_midnight:
-            token_tracker[token] = [0, time.time()]
-            count = 0
+            if last_reset < today_midnight:
+                token_tracker[token] = [0, time.time()]
+                count = 0
 
-        if count >= KEY_LIMIT:
-            return {
-                "error": "Daily request limit reached for this key.",
-                "status": 429,
-                "remains": f"(0/{KEY_LIMIT})"
+            if count >= KEY_LIMIT:
+                return {
+                    "error": "Daily request limit reached for this key.",
+                    "status": 429,
+                    "remains": f"(0/{KEY_LIMIT})"
+                }
+
+            before = make_request(encrypt, server_name, token)
+            if before is None:
+                raise ValueError("Failed to decode Protobuf before sending likes")
+
+            jsone = MessageToJson(before)
+            data = json.loads(jsone)
+            before_like = int(data['AccountInfo'].get('Likes', 0))
+
+            if server_name == "IND":
+                url = "https://client.ind.freefiremobile.com/LikeProfile"
+            else:
+                url = "https://clientbp.ggblueshark.com/LikeProfile"
+
+            asyncio.run(send_multiple_requests(uid, server_name, url))
+
+            after = make_request(encrypt, server_name, token)
+            if after is None:
+                raise ValueError("Failed to decode Protobuf after sending likes")
+
+            jsone = MessageToJson(after)
+            data = json.loads(jsone)
+
+            after_like = int(data['AccountInfo']['Likes'])
+            id = int(data['AccountInfo']['UID'])
+            name = str(data['AccountInfo']['PlayerNickname'])
+
+            like_given = after_like - before_like
+            status = 1 if like_given != 0 else 2
+
+            if like_given > 0:
+                token_tracker[token][0] += 1
+                count += 1
+
+            remains = KEY_LIMIT - count
+
+            result = {
+                "LikesGivenByAPI": like_given,
+                "LikesafterCommand": after_like,
+                "LikesbeforeCommand": before_like,
+                "PlayerNickname": name,
+                "UID": id,
+                "status": status,
+                "remains": f"({remains}/{KEY_LIMIT})"
             }
 
-        before = make_request(encrypt, server_name, token)
-        jsone = MessageToJson(before)
-        data = json.loads(jsone)
-        before_like = int(data['AccountInfo'].get('Likes', 0))
+            result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
+            result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-        # ✅ تعديل: فقط السيرفرين المطلوبين
-        if server_name == "IND":
-            url = "https://client.ind.freefiremobile.com/LikeProfile"
-        else:
-            url = "https://clientbp.ggblueshark.com/LikeProfile"
+            return result
 
-        asyncio.run(send_multiple_requests(uid, server_name, url))
+        result = process_request()
+        return jsonify(result)
 
-        after = make_request(encrypt, server_name, token)
-        jsone = MessageToJson(after)
-        data = json.loads(jsone)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
-        after_like = int(data['AccountInfo']['Likes'])
-        id = int(data['AccountInfo']['UID'])
-        name = str(data['AccountInfo']['PlayerNickname'])
-
-        like_given = after_like - before_like
-        status = 1 if like_given != 0 else 2
-
-        if like_given > 0:
-            token_tracker[token][0] += 1
-            count += 1
-
-        remains = KEY_LIMIT - count
-
-        result = {
-            "LikesGivenByAPI": like_given,
-            "LikesafterCommand": after_like,
-            "LikesbeforeCommand": before_like,
-            "PlayerNickname": name,
-            "UID": id,
-            "status": status,
-            "remains": f"({remains}/{KEY_LIMIT})"
-        }
-
-        # 🕒 أضف وقت التنفيذ والزمن المستغرق
-        result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
-        result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-
-        return result
-
-    result = process_request()
-    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
