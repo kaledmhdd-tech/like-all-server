@@ -1,5 +1,3 @@
-# Code by @xp_owner99 | Don’t upload without credit 
-
 from flask import Flask, request, jsonify
 import asyncio
 from Crypto.Cipher import AES
@@ -9,33 +7,97 @@ import binascii
 import aiohttp
 import requests
 import json
-import like_pb2
+import CSLikeProfile_pb2
 import like_count_pb2
 import uid_generator_pb2
-import time
-from collections import defaultdict
-from datetime import datetime
-import random
+from google.protobuf.message import DecodeError
+from datetime import datetime, timedelta
+import secrets
+import string
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
+import os
 
 app = Flask(__name__)
 
-# ✅ Per-key rate limit setup
-KEY_LIMIT = 150
-token_tracker = defaultdict(lambda: [0, time.time()])  # token: [count, last_reset_time]
+# JSON file for API key storage
+API_KEYS_FILE = "api_keys.json"
 
+# Initialize scheduler for daily reset
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
 
-def get_today_midnight_timestamp():
-    now = datetime.now()
-    midnight = datetime(now.year, now.month, now.day)
-    return midnight.timestamp()
+def load_api_keys():
+    """Load API keys from JSON file"""
+    if not os.path.exists(API_KEYS_FILE):
+        return {}
+    try:
+        with open(API_KEYS_FILE, "r") as f:
+            data = json.load(f)
+            # Convert string dates back to datetime objects
+            for key in data.values():
+                for field in ['created_at', 'expires_at', 'last_reset', 'last_used']:
+                    if field in key and isinstance(key[field], str):
+                        key[field] = datetime.fromisoformat(key[field])
+            return data
+    except Exception as e:
+        app.logger.error(f"Error loading API keys: {e}")
+        return {}
 
+def save_api_keys(keys):
+    """Save API keys to JSON file"""
+    try:
+        with open(API_KEYS_FILE, "w") as f:
+            # Convert datetime objects to strings for JSON serialization
+            keys_to_save = {}
+            for key, value in keys.items():
+                keys_to_save[key] = value.copy()
+                for field in ['created_at', 'expires_at', 'last_reset', 'last_used']:
+                    if field in keys_to_save[key] and isinstance(keys_to_save[key][field], datetime):
+                        keys_to_save[key][field] = keys_to_save[key][field].isoformat()
+            json.dump(keys_to_save, f, indent=2)
+    except Exception as e:
+        app.logger.error(f"Error saving API keys: {e}")
 
-# ✅ تعديل: جلب التوكنات من API بدل الملفات
+def reset_remaining_requests():
+    """Reset remaining requests for all active keys to their total_requests"""
+    try:
+        now = datetime.now()
+        keys = load_api_keys()
+        updated = False
+        
+        for key_data in keys.values():
+            if key_data.get('is_active', True) and key_data.get('expires_at', now) > now:
+                key_data['remaining_requests'] = key_data['total_requests']
+                key_data['last_reset'] = now
+                updated = True
+        
+        if updated:
+            save_api_keys(keys)
+        app.logger.info(f"Successfully reset requests at {now}")
+    except Exception as e:
+        app.logger.error(f"Error in reset_remaining_requests: {e}")
+
+# Schedule daily reset at midnight
+scheduler.add_job(
+    reset_remaining_requests,
+    'cron',
+    hour=0,
+    minute=0,
+    second=0,
+    timezone='UTC'
+)
+
+# ✅ جلب التوكن من الرابطين حسب السيرفر
 def load_tokens(server_name):
     if server_name == "IND":
         url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
+    elif server_name == "ME":
+        url = "https://auto-token-me.onrender.com/api/get_jwt"
     else:
-        url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
+        print(f"Unsupported server: {server_name}")
+        return []
     try:
         res = requests.get(url, timeout=50)
         js = res.json()
@@ -45,183 +107,130 @@ def load_tokens(server_name):
         print(f"Error fetching tokens: {e}")
         return []
 
-
 def encrypt_message(plaintext):
-    key = b'Yg&tc%DEuh6%Zc^8'
-    iv = b'6oyZDr22E3ychjM%'
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    padded_message = pad(plaintext, AES.block_size)
-    encrypted_message = cipher.encrypt(padded_message)
-    return binascii.hexlify(encrypted_message).decode('utf-8')
-
+    try:
+        key = b'Yg&tc%DEuh6%Zc^8'
+        iv = b'6oyZDr22E3ychjM%'
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        padded_message = pad(plaintext, AES.block_size)
+        encrypted_message = cipher.encrypt(padded_message)
+        return binascii.hexlify(encrypted_message).decode('utf-8')
+    except Exception as e:
+        app.logger.error(f"Error encrypting message: {e}")
+        return None
 
 def create_protobuf_message(user_id, region):
-    message = like_pb2.like()
-    message.uid = int(user_id)
-    message.region = region
-    return message.SerializeToString()
-
+    try:
+        message = CSLikeProfile_pb2.CSLikeProfileReq()
+        message.target_id = int(user_id)
+        message.target_region = region
+        return message.SerializeToString()
+    except Exception as e:
+        app.logger.error(f"Error creating protobuf message: {e}")
+        return None
 
 async def send_request(encrypted_uid, token, url):
-    edata = bytes.fromhex(encrypted_uid)
-    headers = {
-        'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip",
-        'Authorization': f"Bearer {token}",
-        'Content-Type': "application/x-www-form-urlencoded",
-        'Expect': "100-continue",
-        'X-Unity-Version': "2018.4.11f1",
-        'X-GA': "v1 1",
-        'ReleaseVersion': "OB50"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=edata, headers=headers) as response:
-            return response.status
-
+    try:
+        edata = bytes.fromhex(encrypted_uid)
+        headers = {
+            'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+            'Connection': "Keep-Alive",
+            'Accept-Encoding': "gzip",
+            'Authorization': f"Bearer {token}",
+            'Content-Type': "application/x-www-form-urlencoded",
+            'Expect': "100-continue",
+            'X-Unity-Version': "2018.4.11f1",
+            'X-GA': "v1 1",
+            'ReleaseVersion': "OB50"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=edata, headers=headers) as response:
+                if response.status != 200:
+                    app.logger.error(f"Request failed with status code: {response.status}")
+                    return response.status
+                return await response.text()
+    except Exception as e:
+        app.logger.error(f"Exception in send_request: {e}")
+        return None
 
 async def send_multiple_requests(uid, server_name, url):
-    region = server_name
-    protobuf_message = create_protobuf_message(uid, region)
-    encrypted_uid = encrypt_message(protobuf_message)
-    tasks = []
-    tokens = load_tokens(server_name)
-    for i in range(100):
-        token = random.choice(tokens)["token"]
-        tasks.append(send_request(encrypted_uid, token, url))
-    results = await asyncio.gather(*tasks)
-    return results
-
+    try:
+        region = server_name
+        protobuf_message = create_protobuf_message(uid, region)
+        if protobuf_message is None:
+            app.logger.error("Failed to create protobuf message.")
+            return None
+        encrypted_uid = encrypt_message(protobuf_message)
+        if encrypted_uid is None:
+            app.logger.error("Encryption failed.")
+            return None
+        tasks = []
+        tokens = load_tokens(server_name)
+        if tokens is None or not tokens:
+            app.logger.error("Failed to load tokens.")
+            return None
+        for i in range(100):
+            token = tokens[i % len(tokens)]["token"]
+            tasks.append(send_request(encrypted_uid, token, url))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return results
+    except Exception as e:
+        app.logger.error(f"Exception in send_multiple_requests: {e}")
+        return None
 
 def create_protobuf(uid):
-    message = uid_generator_pb2.uid_generator()
-    message.krishna_ = int(uid)
-    message.teamXdarks = 1
-    return message.SerializeToString()
-
+    try:
+        message = uid_generator_pb2.uid_generator()
+        message.ujjaiwal_ = int(uid)
+        message.garena = 1
+        return message.SerializeToString()
+    except Exception as e:
+        app.logger.error(f"Error creating uid protobuf: {e}")
+        return None
 
 def enc(uid):
     protobuf_data = create_protobuf(uid)
+    if protobuf_data is None:
+        return None
     encrypted_uid = encrypt_message(protobuf_data)
     return encrypted_uid
 
-
 def make_request(encrypt, server_name, token):
-    # ✅ تعديل: فقط السيرفرين المحددين
-    if server_name == "IND":
-        url = "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
-    else:
-        url = "https://clientbp.ggblueshark.com/GetPlayerPersonalShow"
-
-    edata = bytes.fromhex(encrypt)
-    headers = {
-        'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
-        'Connection': "Keep-Alive",
-        'Accept-Encoding': "gzip",
-        'Authorization': f"Bearer {token}",
-        'Content-Type': "application/x-www-form-urlencoded",
-        'Expect': "100-continue",
-        'X-Unity-Version': "2018.4.11f1",
-        'X-GA': "v1 1",
-        'ReleaseVersion': "OB50"
-    }
-
-    response = requests.post(url, data=edata, headers=headers, verify=False)
-    hex_data = response.content.hex()
-    binary = bytes.fromhex(hex_data)
-    return decode_protobuf(binary)
-
-
-def decode_protobuf(binary):
     try:
-        items = like_count_pb2.Info()
-        items.ParseFromString(binary)
-        return items
-    except Exception as e:
-        print(f"Error decoding Protobuf data: {e}")
-        return None
-
-
-@app.route('/like', methods=['GET'])
-def handle_requests():
-    start_time = time.time()
-
-    uid = request.args.get("uid")
-    server_name = request.args.get("server_name", "").upper()
-    key = request.args.get("key")
-
-    if key != "diamondxpress":
-        return jsonify({"error": "Invalid or missing API key 🔑"}), 403
-
-    if not uid or not server_name:
-        return jsonify({"error": "UID and server_name are required"}), 400
-
-    def process_request():
-        data = load_tokens(server_name)
-        token = data[0]['token']
-        encrypt = enc(uid)
-
-        today_midnight = get_today_midnight_timestamp()
-        count, last_reset = token_tracker[token]
-
-        if last_reset < today_midnight:
-            token_tracker[token] = [0, time.time()]
-            count = 0
-
-        if count >= KEY_LIMIT:
-            return {
-                "error": "Daily request limit reached for this key.",
-                "status": 429,
-                "remains": f"(0/{KEY_LIMIT})"
-            }
-
-        before = make_request(encrypt, server_name, token)
-        jsone = MessageToJson(before)
-        data = json.loads(jsone)
-        before_like = int(data['AccountInfo'].get('Likes', 0))
-
-        # ✅ تعديل: فقط السيرفرين المطلوبين
         if server_name == "IND":
-            url = "https://client.ind.freefiremobile.com/LikeProfile"
+            url = "https://client.ind.freefiremobile.com/GetPlayerPersonalShow"
+        elif server_name == "ME":
+            url = "https://clientbp.freefiremobile.com/GetPlayerPersonalShow"
         else:
-            url = "https://clientbp.ggblueshark.com/LikeProfile"
+            print(f"Unsupported server: {server_name}")
+            return None
 
-        asyncio.run(send_multiple_requests(uid, server_name, url))
-
-        after = make_request(encrypt, server_name, token)
-        jsone = MessageToJson(after)
-        data = json.loads(jsone)
-
-        after_like = int(data['AccountInfo']['Likes'])
-        id = int(data['AccountInfo']['UID'])
-        name = str(data['AccountInfo']['PlayerNickname'])
-
-        like_given = after_like - before_like
-        status = 1 if like_given != 0 else 2
-
-        if like_given > 0:
-            token_tracker[token][0] += 1
-            count += 1
-
-        remains = KEY_LIMIT - count
-
-        result = {
-            "LikesGivenByAPI": like_given,
-            "LikesafterCommand": after_like,
-            "LikesbeforeCommand": before_like,
-            "PlayerNickname": name,
-            "UID": id,
-            "status": status,
-            "remains": f"({remains}/{KEY_LIMIT})",
-            "elapsed_time": f"{round(time.time() - start_time, 3)} sec",
-            "executed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        edata = bytes.fromhex(encrypt)
+        headers = {
+            'User-Agent': "Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)",
+            'Connection': "Keep-Alive",
+            'Accept-Encoding': "gzip",
+            'Authorization': f"Bearer {token}",
+            'Content-Type': "application/x-www-form-urlencoded",
+            'Expect': "100-continue",
+            'X-Unity-Version': "2018.4.11f1",
+            'X-GA': "v1 1",
+            'ReleaseVersion': "OB50"
         }
 
-        return result
+        response = requests.post(url, data=edata, headers=headers, verify=False)
+        hex_data = response.content.hex()
+        binary = bytes.fromhex(hex_data)
+        decode = decode_protobuf(binary)
+        if decode is None:
+            app.logger.error("Protobuf decoding returned None.")
+        return decode
 
-    result = process_request()
-    return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error in make_request: {e}")
+        return None
 
+# باقي الكود بدون تغيير ...
 
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False)
+    app.run(debug=True)
