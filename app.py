@@ -32,7 +32,7 @@ def load_tokens(server_name):
     if server_name == "IND":
         url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
     elif server_name == "ME":
-        url = "https://auto-token-me.onrender.com/api/get_jwt"
+        url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
     else:
         print(f"Unsupported server: {server_name}")
         return []
