@@ -28,7 +28,7 @@ def get_today_midnight_timestamp():
 # ✅ تعديل: جلب التوكنات من الـ API بدل الملفات
 def load_tokens(server_name):
     if server_name == "IND":
-        url = "https://auto-token-ind.onrender.com/api/get_jwt"
+        url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
     else:
         url = "https://aauto-token.onrender.com/api/get_jwt"
     try:
