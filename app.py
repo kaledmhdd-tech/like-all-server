@@ -1,3 +1,5 @@
+# Code by @xp_owner99 | Don’t upload without credit 
+
 from flask import Flask, request, jsonify
 import asyncio
 from Crypto.Cipher import AES
@@ -14,18 +16,21 @@ import time
 from collections import defaultdict
 from datetime import datetime
 import random
+
 app = Flask(__name__)
 
 # ✅ Per-key rate limit setup
-KEY_LIMIT = 1000
+KEY_LIMIT = 150
 token_tracker = defaultdict(lambda: [0, time.time()])  # token: [count, last_reset_time]
+
 
 def get_today_midnight_timestamp():
     now = datetime.now()
     midnight = datetime(now.year, now.month, now.day)
     return midnight.timestamp()
 
-# ✅ تعديل: جلب التوكنات من الـ API بدل الملفات
+
+# ✅ تعديل: جلب التوكنات من API بدل الملفات
 def load_tokens(server_name):
     if server_name == "IND":
         url = "https://auto-token-n5t7.onrender.com/api/get_jwt"
@@ -40,6 +45,7 @@ def load_tokens(server_name):
         print(f"Error fetching tokens: {e}")
         return []
 
+
 def encrypt_message(plaintext):
     key = b'Yg&tc%DEuh6%Zc^8'
     iv = b'6oyZDr22E3ychjM%'
@@ -48,11 +54,13 @@ def encrypt_message(plaintext):
     encrypted_message = cipher.encrypt(padded_message)
     return binascii.hexlify(encrypted_message).decode('utf-8')
 
+
 def create_protobuf_message(user_id, region):
     message = like_pb2.like()
     message.uid = int(user_id)
     message.region = region
     return message.SerializeToString()
+
 
 async def send_request(encrypted_uid, token, url):
     edata = bytes.fromhex(encrypted_uid)
@@ -71,17 +79,19 @@ async def send_request(encrypted_uid, token, url):
         async with session.post(url, data=edata, headers=headers) as response:
             return response.status
 
+
 async def send_multiple_requests(uid, server_name, url):
     region = server_name
     protobuf_message = create_protobuf_message(uid, region)
     encrypted_uid = encrypt_message(protobuf_message)
     tasks = []
     tokens = load_tokens(server_name)
-    for i in range(200):
+    for i in range(100):
         token = random.choice(tokens)["token"]
         tasks.append(send_request(encrypted_uid, token, url))
     results = await asyncio.gather(*tasks)
     return results
+
 
 def create_protobuf(uid):
     message = uid_generator_pb2.uid_generator()
@@ -89,10 +99,12 @@ def create_protobuf(uid):
     message.teamXdarks = 1
     return message.SerializeToString()
 
+
 def enc(uid):
     protobuf_data = create_protobuf(uid)
     encrypted_uid = encrypt_message(protobuf_data)
     return encrypted_uid
+
 
 def make_request(encrypt, server_name, token):
     # ✅ تعديل: فقط السيرفرين المحددين
@@ -119,6 +131,7 @@ def make_request(encrypt, server_name, token):
     binary = bytes.fromhex(hex_data)
     return decode_protobuf(binary)
 
+
 def decode_protobuf(binary):
     try:
         items = like_count_pb2.Info()
@@ -128,15 +141,16 @@ def decode_protobuf(binary):
         print(f"Error decoding Protobuf data: {e}")
         return None
 
+
 @app.route('/like', methods=['GET'])
 def handle_requests():
-    start_time = time.time()  # ⏱️ بداية القياس
+    start_time = time.time()
 
     uid = request.args.get("uid")
     server_name = request.args.get("server_name", "").upper()
     key = request.args.get("key")
 
-    if key != "BNGXX":
+    if key != "diamondxpress":
         return jsonify({"error": "Invalid or missing API key 🔑"}), 403
 
     if not uid or not server_name:
@@ -198,17 +212,16 @@ def handle_requests():
             "PlayerNickname": name,
             "UID": id,
             "status": status,
-            "remains": f"({remains}/{KEY_LIMIT})"
+            "remains": f"({remains}/{KEY_LIMIT})",
+            "elapsed_time": f"{round(time.time() - start_time, 3)} sec",
+            "executed_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         }
-
-        # 🕒 أضف وقت التنفيذ والزمن المستغرق
-        result["elapsed_time"] = f"{round(time.time() - start_time, 3)} sec"
-        result["executed_at"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
         return result
 
     result = process_request()
     return jsonify(result)
+
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
