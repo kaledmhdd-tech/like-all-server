@@ -6,3 +6,4 @@ pycryptodome
 protobuf
 Werkzeug
 schedule
+psutil
