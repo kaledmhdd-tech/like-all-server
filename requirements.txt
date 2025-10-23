@@ -5,5 +5,3 @@ googleapis-common-protos
 pycryptodome
 protobuf
 Werkzeug
-schedule
-psutil
